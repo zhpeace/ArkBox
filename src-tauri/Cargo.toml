@@ -1,0 +1,58 @@
+[package]
+name = "arkbox"
+version = "0.1.0"
+description = "方舟压包 - 跨平台压缩/解压工具"
+authors = ["老张"]
+edition = "2021"
+# 同时存在 src/main.rs 与 bz-qlhelper 两个 bin，Cargo 无法自动推断主二进制，
+# tauri build 会报 "failed to find main binary"，必须显式指定。
+default-run = "arkbox"
+
+[lib]
+name = "arkbox_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+zip = { version = "2", default-features = false, features = ["aes-crypto", "deflate", "bzip2", "zstd", "xz"] }
+# aes256：sevenz-rust 的 7z 加密写入能力在该 feature 下才编译（默认只有 compress）。
+# 有了它，7z 就能和 zip 一样支持密码压缩（AES-256 + 加密文件头）。
+sevenz-rust = { version = "0.6", features = ["aes256"] }
+# RAR 只能读不能写：RAR 编码器为 win.rar GmbH 专有，从未授权开源实现。
+# unrar 绑定官方 UnRAR 源码（解包免费，禁止用于创建 RAR），见 LICENSE 中 UnRAR 许可声明。
+unrar = "0.5"
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.4"
+xz2 = "0.1"
+zstd = "0.13"
+walkdir = "2"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+dirs = "5"
+url = "2"
+tempfile = "3"
+
+[features]
+default = []
+
+[[bin]]
+name = "bz-qlhelper"
+path = "src/bin/qlhelper.rs"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

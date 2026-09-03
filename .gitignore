@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# ArkBox / 方舟压包
+# ---------------------------------------------------------------------------
+
+# --- Rust / Tauri 构建产物 -------------------------------------------------
+# 6.9G，含 release 二进制、LTO 中间产物、bundle/dmg 与 bundle/macos
+src-tauri/target/
+
+# Tauri 自动生成的配置 schema，每次 build 会重写
+src-tauri/gen/schemas/
+
+# --- Node / 前端 -----------------------------------------------------------
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+vite.config.ts.timestamp-*
+vite.config.js.timestamp-*
+
+# --- macOS 原生扩展的构建产物 ----------------------------------------------
+# 源码（generate.c / findersync.m / 两个 Info.plist / build.sh）保留，
+# 编译出来的 bundle 不入库
+quicklook/ArkBoxQL/ArkBoxQL.qlgenerator/
+quicklook/ArkBoxQL/build/
+findersync/ArkBoxFSE.appex/
+**/DerivedData/
+**/*.xcuserdata
+**/*.xcworkspace
+
+# --- 打包与签名产物 --------------------------------------------------------
+*.dmg
+*.app/
+*.pkg
+
+# 签名证书与密钥：一旦误提交就必须吊销重签，务必挡住
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.key
+*.pem
+
+# --- 日志与运行时 ----------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- 系统与编辑器 ----------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- 环境变量 --------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- 本地会话数据 ----------------------------------------------------------
+# WorkBuddy 的会话记忆/工作日志，属个人本地数据，不进公共仓库
+.workbuddy/

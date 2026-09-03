@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>ArkBoxQL</string>
+    <key>CFBundleDisplayName</key>
+    <string>ArkBox 预览</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.arkbox.desktop.qlgenerator</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>QKGd</string>
+    <key>CFBundleExecutable</key>
+    <string>ArkBoxQL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <key>CFPlugInTypes</key>
+    <dict>
+        <!-- kQLGeneratorTypeID -->
+        <key>5E2D9680-5022-40FA-B806-43349622E5B9</key>
+        <array>
+            <!-- kQLGeneratorCallbacksInterfaceID（工厂 UUID）-->
+            <string>865AF5E0-6D30-4345-951B-D37105754F2D</string>
+        </array>
+    </dict>
+    <key>CFPlugInFactories</key>
+    <dict>
+        <key>865AF5E0-6D30-4345-951B-D37105754F2D</key>
+        <string>QCGetGeneratorInterface</string>
+    </dict>
+    <!-- 声明本生成器能预览的 UTI -->
+    <key>QLSupportedContentTypes</key>
+    <array>
+        <string>public.zip-archive</string>
+        <string>com.rarlab.rar-archive</string>
+        <string>org.7-zip.7-zip-archive</string>
+        <string>public.tar-archive</string>
+        <string>public.gzip</string>
+        <string>public.bzip2-archive</string>
+        <string>org.xz.xz-archive</string>
+    </array>
+    <key>QLPreviewWidth</key>
+    <real>800</real>
+    <key>QLPreviewHeight</key>
+    <real>600</real>
+    <key>QLSupportsConcurrentRequests</key>
+    <true/>
+</dict>
+</plist>
