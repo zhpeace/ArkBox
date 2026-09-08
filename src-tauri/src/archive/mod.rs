@@ -5,6 +5,7 @@ pub mod single;
 pub mod tarball;
 pub mod test;
 pub mod zip;
+pub mod sevenzip_cli;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,6 +100,7 @@ pub fn extract(
             single::extract_single(archive, dest, fmt, on_progress.as_ref())
         }
         ArchiveFormat::Rar => rar::extract_rar(archive, dest, entries, password, on_progress.as_ref()),
+        ArchiveFormat::SevenZipCli => sevenzip_cli::extract(archive, dest, entries, password, on_progress),
         _ => tarball::extract_tar(archive, dest, entries, on_progress.as_ref()),
     }
 }
@@ -112,6 +114,7 @@ pub fn list_entries(archive: &str, password: Option<&str>) -> AppResult<Vec<Entr
             single::list_single(archive, fmt)
         }
         ArchiveFormat::Rar => rar::list_rar(archive, password),
+        ArchiveFormat::SevenZipCli => sevenzip_cli::list_entries(archive, password),
         _ => tarball::list_tar(archive),
     }
 }
@@ -143,6 +146,7 @@ pub fn test_archive(archive: &str, password: Option<&str>) -> AppResult<TestResu
             single::test_single(archive, fmt)
         }
         ArchiveFormat::Rar => rar::test_rar(archive, password),
+        ArchiveFormat::SevenZipCli => sevenzip_cli::test_archive(archive, password),
         _ => test::test_tar(archive),
     }
 }
@@ -182,4 +186,43 @@ fn collect_count(abs: &Path, base: &Path, exclude: &[String], compress_hidden: b
     } else {
         *n += 1;
     }
+}
+
+/// 把归档内某个条目（通常用于嵌套压缩包）提取到持久临时目录，返回其绝对路径。
+/// 前端借此以该临时文件为 archive 再调 list_entries / preview_entry，实现逐层浏览。
+/// 临时目录落在 std::env::temp_dir() 下（app 退出后由系统回收），不依赖 tempfile 的自动删除。
+pub fn extract_one_to_temp(archive: &str, entry: &str, password: Option<&str>) -> AppResult<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("arkbox_nested_{}_{}", std::process::id(), stamp));
+    fs::create_dir_all(&dir).map_err(AppError::Io)?;
+    let dest = dir
+        .to_str()
+        .ok_or_else(|| AppError::Other("临时目录路径含非 UTF-8 字符".into()))?;
+    let entries = vec![entry.to_string()];
+    // 复用现有 extract 分发：外层 zip 走 zip 引擎、7z 走 sevenz、iso/dmg 等走 7z 二进制兜底，
+    // 内层压缩包解出来后同样是合法归档，可再被 list_entries 识别。
+    extract(archive, dest, Some(&entries), password, None)?;
+
+    let want = Path::new(entry)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut found: Option<PathBuf> = None;
+    fn walk(p: &Path, want: &str, out: &mut Option<PathBuf>) {
+        if let Ok(rd) = fs::read_dir(p) {
+            for e in rd.flatten() {
+                let p2 = e.path();
+                if p2.is_dir() {
+                    walk(&p2, want, out);
+                } else if p2.file_name().map(|n| n.to_string_lossy() == want).unwrap_or(false) {
+                    *out = Some(p2);
+                }
+            }
+        }
+    }
+    walk(&dir, &want, &mut found);
+    found.ok_or_else(|| AppError::UnsupportedFormat(format!("归档内找不到条目: {entry}")))
 }

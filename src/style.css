@@ -221,3 +221,46 @@ select:focus {
     margin-left: 100%;
   }
 }
+
+/* 条目列表 / 预览 之间的可拖拽分隔条 */
+.splitter {
+  flex: 0 0 6px;
+  border-radius: 3px;
+  background: transparent;
+  cursor: col-resize;
+  transition: background 0.15s ease;
+}
+.splitter:hover {
+  background: var(--accent);
+}
+
+/* 档案内增删 / 重命名条目：列表行尾的紧凑操作区 */
+.item .actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.item .actions .mini {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.item .actions .rename-input {
+  width: 160px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+/* 嵌套压缩包逐层浏览：面包屑路径 */
+.crumb {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12px;
+}
+.crumb:hover {
+  text-decoration: underline;
+}
+.crumb.cur {
+  color: var(--text);
+  font-weight: 600;
+  cursor: default;
+}

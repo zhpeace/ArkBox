@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "cd .. && npx vite build && cd src-tauri && cargo build --release --bin bz-cli"
   },
   "app": {
     "windows": [
@@ -36,9 +36,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": ["binaries/"],
     "fileAssociations": [
       {
-        "ext": ["zip", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "txz", "rar"],
+        "ext": ["zip", "zipx", "jar", "apk", "war", "ear", "epub", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "txz", "rar", "iso", "cab", "deb", "rpm", "cpio", "xar", "br", "dmg", "pkg", "img"],
         "name": "Archive",
         "description": "压缩包文件",
         "role": "Viewer"
@@ -46,7 +47,15 @@
     ],
     "macOS": {
       "infoPlist": "Info.plist.extra",
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "files": {
+        "MacOS/bz-cli": "target/release/bz-cli"
+      }
+    },
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"]
+      }
     }
   }
 }

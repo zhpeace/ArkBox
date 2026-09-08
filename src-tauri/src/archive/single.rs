@@ -6,6 +6,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use base64::Engine;
+
 use crate::error::{AppError, AppResult};
 use crate::model::{ArchiveFormat, ArchiveInfo, EntryInfo, EntryTestStatus, ExtractResult, PreviewData, ProgressFn, TestResult};
 
@@ -163,7 +165,7 @@ pub fn preview_single(
     max_bytes: usize,
 ) -> AppResult<PreviewData> {
     let src = File::open(archive).map_err(AppError::Io)?;
-    let mut dec = open_decoder(fmt, src)?;
+    let dec = open_decoder(fmt, src)?;
     let mut buf = Vec::new();
     let mut limited = dec.take(max_bytes as u64 + 1);
     limited.read_to_end(&mut buf).map_err(AppError::Io)?;
@@ -184,7 +186,7 @@ pub fn preview_single(
             name,
             mime,
             text: None,
-            data_base64: Some(base64::encode(&buf)),
+            data_base64: Some(base64::engine::general_purpose::STANDARD.encode(&buf)),
             truncated,
             is_binary: true,
         })

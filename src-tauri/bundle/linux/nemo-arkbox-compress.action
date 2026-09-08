@@ -1,0 +1,8 @@
+[Nemo Action]
+Active=true
+Name=用 ArkBox 压缩
+Comment=压缩为同级 .zip（静默，不弹窗）
+Exec=bz-cli compress %F
+Selection=any
+Extensions=any
+Quote=double

@@ -5,10 +5,15 @@ mod edit;
 mod error;
 pub mod model;
 mod presets;
+mod keychain;
+mod apple_double;
+#[cfg(windows)]
+mod windows_shell;
 
 use commands::*;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
+use crate::model::ArchiveFormat;
 
 /// 文件关联打开 / 拖放待加载的压缩包路径队列（冷启动也能被前端拉取）
 pub struct PendingOpen(pub Arc<Mutex<Vec<String>>>);
@@ -16,6 +21,35 @@ pub struct PendingOpen(pub Arc<Mutex<Vec<String>>>);
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let pending = PendingOpen(Arc::new(Mutex::new(Vec::new())));
+
+    // 解析命令行参数里的压缩包路径：Finder Sync Extension 用 NSTask 直启本二进制并把选中路径作为
+    // argv 传过来。冷启动时 macOS 不会投递 AppleEvent，这里兜底进 PendingOpen；运行中再次打开
+    // 则由 Tauri singleInstance 拦截并把参数转发给运行实例、走下面的 RunEvent::Opened 分支。
+    // 解析命令行参数：
+    // - 压缩包路径（from_ext 识别）→ 进 PendingOpen，前端走「浏览」
+    // - `--compress <path>`（Windows 右键「压缩」传入的普通文件）→ 同样进 PendingOpen，
+    //   前端 handleDrop 识别为非压缩包，走「压缩页预填」
+    // Finder Sync Extension（macOS）用 NSTask 直启本二进制并传选中路径作 argv；
+    // 冷启动时 macOS 不投递 AppleEvent，这里兜底进 PendingOpen。
+    let mut cli_paths: Vec<String> = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--compress" {
+            if let Some(p) = args.next() {
+                cli_paths.push(p);
+            }
+        } else if ArchiveFormat::from_ext(&a).is_some() {
+            cli_paths.push(a);
+        }
+    }
+    if !cli_paths.is_empty() {
+        pending.0.lock().unwrap().extend(cli_paths);
+    }
+
+    // Windows：注册右键上下文菜单（HKCU，用户级，无需管理员）。macOS/Linux 不编译此模块。
+    #[cfg(windows)]
+    crate::windows_shell::register_context_menus();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -33,10 +67,19 @@ pub fn run() {
             begin_edit_entry,
             commit_edit,
             cancel_edit,
-            take_pending_open
+            delete_entries,
+            rename_entry,
+            add_entries,
+            take_pending_open,
+            reveal_in_finder,
+            open_with_default_app,
+            extract_nested
         ])
         .build(tauri::generate_context!())
         .expect("error while building ArkBox");
+
+    // 初始化内置 7z 引擎路径（iso/cab/dmg 等只读格式浏览兜底）
+    crate::archive::sevenzip_cli::init_bin(app.handle());
 
     app.run(|app_handle, event| {
         if let tauri::RunEvent::Opened { urls } = event {
@@ -260,6 +303,51 @@ mod smoke {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// 嵌套压缩包逐层浏览（方案 A）：outer.zip 内含 inner.zip，提取 inner.zip 到临时文件后
+    /// 应能再以它为归档列出其内部条目。
+    #[test]
+    fn nested_browse() {
+        let dir = std::env::temp_dir().join("bz_smoke_nested");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let inner = dir.join("inner.zip");
+        archive::compress(
+            &[stage(&dir, "a.txt", b"inside nested").to_string_lossy().to_string()],
+            inner.to_str().unwrap(),
+            "zip",
+            None,
+            6,
+            &[],
+            true,
+            None,
+        )
+        .unwrap();
+        let outer = dir.join("outer.zip");
+        archive::compress(
+            &[inner.to_string_lossy().to_string()],
+            outer.to_str().unwrap(),
+            "zip",
+            None,
+            6,
+            &[],
+            true,
+            None,
+        )
+        .unwrap();
+
+        // 关键：把内层压缩包提取到临时文件
+        let tmp = archive::extract_one_to_temp(outer.to_str().unwrap(), "inner.zip", None).unwrap();
+        // 以临时文件为归档再列条目，应看到 inner.zip 里的内容
+        let entries = archive::list_entries(tmp.to_str().unwrap(), None).unwrap();
+        assert!(
+            entries.iter().any(|e| e.name == "a.txt"),
+            "嵌套浏览应看到 inner.zip 内的 a.txt，实际: {:?}",
+            entries
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn single_file_roundtrip() {
         for fmt in ["gz", "bz2", "xz", "zst"] {
@@ -291,5 +379,38 @@ mod smoke {
             );
             let _ = fs::remove_dir_all(&dir);
         }
+    }
+
+    /// 回归：极短文件名的加密 7z 也必须加密文件头，
+    /// 验证 README 旧“小文件明文头泄露”描述在 sevenz-rust 0.6.1 下已不成立。
+    #[test]
+    fn short_name_7z_aes() {
+        let dir = std::env::temp_dir().join("bz_smoke_7z_short");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let f = stage(&dir, "a.txt", b"x");
+        let out = dir.join("s.7z");
+        archive::compress(
+            &[f.to_string_lossy().to_string()],
+            out.to_str().unwrap(),
+            "7z",
+            Some("pw"),
+            6,
+            &[],
+            true,
+            None,
+        )
+        .unwrap();
+        assert!(
+            archive::list_entries(out.to_str().unwrap(), None).is_err(),
+            "短文件名加密 7z 无密码不应能列出文件名"
+        );
+        let entries = archive::list_entries(out.to_str().unwrap(), Some("pw")).unwrap();
+        assert!(entries.iter().any(|e| e.name.ends_with("a.txt")));
+        let dest = dir.join("ext");
+        let res = archive::extract(out.to_str().unwrap(), dest.to_str().unwrap(), None, Some("pw"), None).unwrap();
+        assert_eq!(res.extracted, 1);
+        assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"x");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -28,6 +28,9 @@ pub enum ArchiveFormat {
     Zstd,
     /// RAR 只能读不能写（编码器为专有实现，从未开源授权）。
     Rar,
+    /// 7z CLI 兜底层格式（iso/cab/cpio/dmg/deb/rpm/xar/brotli/纯 tar 等），
+    /// 用打包内置的 7z 二进制做只读浏览/解压/预览/校验。
+    SevenZipCli,
 }
 
 /// 判断文件名是否属于 RAR 家族：`.rar`、`.part1.rar`、旧式 `.r01` / `.001` 分卷。
@@ -51,7 +54,12 @@ fn is_rar_name(p: &str) -> bool {
 impl ArchiveFormat {
     pub fn from_ext(path: &str) -> Option<ArchiveFormat> {
         let p = path.to_ascii_lowercase();
-        if p.ends_with(".zip") || p.ends_with(".zipx") {
+        // .jar / .war / .apk 本质是标准 ZIP 容器（仅约定内部目录结构不同），
+        // 用 zip 后端即可浏览与解压；写入同理产生合法 zip 文件。
+        if p.ends_with(".zip") || p.ends_with(".zipx") || p.ends_with(".jar")
+            || p.ends_with(".war") || p.ends_with(".ear") || p.ends_with(".apk")
+            || p.ends_with(".epub")
+        {
             Some(ArchiveFormat::Zip)
         } else if p.ends_with(".7z") {
             Some(ArchiveFormat::SevenZip)
@@ -71,6 +79,14 @@ impl ArchiveFormat {
             Some(ArchiveFormat::Xz)
         } else if p.ends_with(".zst") {
             Some(ArchiveFormat::Zstd)
+        } else if p.ends_with(".iso") || p.ends_with(".img")
+            || p.ends_with(".cab") || p.ends_with(".cpio")
+            || p.ends_with(".dmg") || p.ends_with(".deb") || p.ends_with(".rpm")
+            || p.ends_with(".xar") || p.ends_with(".pkg") || p.ends_with(".xip")
+            || p.ends_with(".br") || p.ends_with(".tar")
+        {
+            // 镜像/封装类格式走内置 7z 二进制做只读兜底（list/extract/preview/test）。
+            Some(ArchiveFormat::SevenZipCli)
         } else if is_rar_name(&p) {
             Some(ArchiveFormat::Rar)
         } else {
@@ -80,7 +96,7 @@ impl ArchiveFormat {
 
     pub fn from_str(s: &str) -> Option<ArchiveFormat> {
         match s.to_ascii_lowercase().as_str() {
-            "zip" | "zipx" => Some(ArchiveFormat::Zip),
+            "zip" | "zipx" | "jar" | "war" | "ear" | "apk" | "epub" => Some(ArchiveFormat::Zip),
             "7z" | "sevenzip" => Some(ArchiveFormat::SevenZip),
             "targz" | "tgz" | "tar.gz" => Some(ArchiveFormat::TarGz),
             "tarbz" | "tbz" | "tar.bz2" => Some(ArchiveFormat::TarBz),
@@ -108,6 +124,7 @@ impl ArchiveFormat {
             ArchiveFormat::Xz => "xz",
             ArchiveFormat::Zstd => "zst",
             ArchiveFormat::Rar => "rar",
+            ArchiveFormat::SevenZipCli => "7z-cli",
         }
     }
 }

@@ -4,36 +4,156 @@
 <dict>
   <key>CFBundleDisplayName</key>
   <string>方舟压包</string>
-  <key>NSServices</key>
+  <!-- 早期方案 A 的 NSServices 声明（用 ArkBox 压缩/解压，NSExecutable=bz-cli）已删除。
+       保留它的两个问题：①与 Finder Sync Extension 的右键顶级「ArkBox」菜单重复；
+       ②NSSendFileTypes 过宽（public.data/public.content/public.directory），
+       导致任何文件（如 docx）的 Services 菜单都会出现 ArkBox 项。 -->
+  <!-- 文件关联：覆盖 Tauri 自动生成的 CFBundleDocumentTypes，显式 claim 各格式的系统 UTI，
+       确保「打开方式 / Open With」能出现 ArkBox。zip 系用标准 com.pkware.zip-archive，
+       jar 用 com.sun.java-archive（jar 经验：仅加扩展名不够，必须 claim 标准 UTI），
+       dmg/iso/img 用 com.apple.disk-image / public.iso-image，rar 用 com.rarlab.rar-archive，
+       pkg 用 com.apple.installer-package-archive；其余 Tauri 未覆盖的用 com.arkbox.<ext>。 -->
+  <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
-      <key>NSMenuItem</key>
-      <dict>
-        <key>default</key>
-        <string>用 ArkBox 处理</string>
-      </dict>
-      <key>NSMessage</key>
-      <string>openInArkBox</string>
-      <key>NSPortName</key>
-      <string>ArkBox</string>
-      <key>NSSendTypes</key>
-      <array>
-        <string>NSFilenamesPboardType</string>
-      </array>
-      <key>NSSendFileTypes</key>
-      <array>
-        <string>public.archive</string>
-        <string>public.zip-archive</string>
-        <string>public.tar-archive</string>
-        <string>com.rarlab.rar-archive</string>
-        <string>com.pkware.zip-archive</string>
-        <string>org.gnu.gnu-zip-archive</string>
-        <string>public.data</string>
-      </array>
-      <key>NSReturnTypes</key>
-      <array/>
-      <key>NSRequiredContext</key>
-      <dict/>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>zip</string><string>zipx</string><string>apk</string><string>war</string><string>ear</string><string>epub</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Zip Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.pkware.zip-archive</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>jar</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Java Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.sun.java-archive</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>7z</string></array>
+      <key>CFBundleTypeName</key>
+      <string>7z Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.7z</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>tar</string><string>tgz</string><string>tbz</string><string>txz</string><string>tzst</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Tar Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.tar</string><string>com.arkbox.tgz</string><string>com.arkbox.tbz</string><string>com.arkbox.txz</string><string>com.arkbox.tzst</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>gz</string><string>bz2</string><string>xz</string><string>zst</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Single-stream Compressed</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.gz</string><string>com.arkbox.bz2</string><string>com.arkbox.xz</string><string>com.arkbox.zst</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>rar</string></array>
+      <key>CFBundleTypeName</key>
+      <string>RAR Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.rarlab.rar-archive</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>iso</string><string>img</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Disk Image</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.iso-image</string><string>com.apple.disk-image</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>dmg</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Apple Disk Image</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.apple.disk-image</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>cab</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Cabinet Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.microsoft.cab-archive</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>cpio</string></array>
+      <key>CFBundleTypeName</key>
+      <string>CPIO Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.cpio</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>deb</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Debian Package</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.deb</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>rpm</string></array>
+      <key>CFBundleTypeName</key>
+      <string>RPM Package</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.rpm</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>xar</string><string>pkg</string><string>xip</string></array>
+      <key>CFBundleTypeName</key>
+      <string>XAR Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.xar</string><string>com.apple.installer-package-archive</string><string>com.arkbox.xip</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>br</string></array>
+      <key>CFBundleTypeName</key>
+      <string>Brotli Compressed</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>com.arkbox.br</string></array>
     </dict>
   </array>
 </dict>

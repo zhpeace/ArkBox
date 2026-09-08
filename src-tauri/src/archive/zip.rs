@@ -1,6 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{copy, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -8,6 +12,7 @@ use zip::read::ZipFile;
 use zip::write::{ExtendedFileOptions, FileOptions};
 use zip::{AesMode, CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::apple_double;
 use crate::archive::should_exclude;
 use crate::error::{AppError, AppResult};
 use crate::model::{
@@ -111,10 +116,27 @@ fn add_path(
         return Ok(());
     }
 
+    // 符号链接：不跟随，记录目标路径（unix 模式标记为 0o120777）
+    if abs.is_symlink() {
+        let target = fs::read_link(abs)?;
+        let target_str = target.to_string_lossy().to_string();
+        let opts = base_opts(level, password).unix_permissions(0o777);
+        zw.add_symlink(&rel_str, &target_str, opts)
+            .map_err(|e| AppError::Archive(e.to_string()))?;
+        *done += 1;
+        maybe_write_apple_double(zw, abs, &rel_str, password, level)?;
+        if let Some(cb) = on_progress {
+            cb(*done as u64, total as u64);
+        }
+        return Ok(());
+    }
+
     if abs.is_dir() {
-        let opts = base_opts(level, password);
+        let mode = dir_mode(abs)?;
+        let opts = base_opts(level, password).unix_permissions(mode);
         zw.add_directory(format!("{rel_str}/"), opts)
             .map_err(|e| AppError::Archive(e.to_string()))?;
+        maybe_write_apple_double(zw, abs, &rel_str, password, level)?;
         for entry in fs::read_dir(abs)? {
             let entry = entry?;
             add_path(
@@ -131,7 +153,8 @@ fn add_path(
             )?;
         }
     } else {
-        let opts = base_opts(level, password);
+        let mode = file_mode(abs)?;
+        let opts = base_opts(level, password).unix_permissions(mode);
         zw.start_file(&rel_str, opts)
             .map_err(|e| AppError::Archive(e.to_string()))?;
         let mut f = fs::File::open(abs)?;
@@ -141,9 +164,11 @@ fn add_path(
             if n == 0 {
                 break;
             }
-            zw.write_all(&buf[..n])?;
+            zw.write_all(&buf[..n])
+                .map_err(|e| AppError::Archive(e.to_string()))?;
         }
         *done += 1;
+        maybe_write_apple_double(zw, abs, &rel_str, password, level)?;
         if let Some(cb) = on_progress {
             cb(*done as u64, total as u64);
         }
@@ -165,30 +190,40 @@ pub fn extract_zip(
     fs::create_dir_all(dest)?;
     let mut count = 0usize;
 
-    let total: u64 = {
-        let mut t = 0u64;
-        for i in 0..za.len() {
-            let f = open_entry(&mut za, i, password)
-                .map_err(|e| AppError::Archive(e.to_string()))?;
-            let name = f.name().to_string();
-            if f.is_dir() || name.ends_with('/') {
+    // 第一遍：收集 __MACOSX 元数据；统计真实文件体积
+    let mut xattr_map: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
+    let mut total = 0u64;
+    for i in 0..za.len() {
+        let mut f = open_entry(&mut za, i, password)
+            .map_err(|e| AppError::Archive(e.to_string()))?;
+        let name = f.name().to_string();
+        if let Some(real) = strip_apple_double(&name) {
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            if let Some((_fi, others)) = apple_double::parse(&buf) {
+                xattr_map.insert(real, others);
+            }
+            continue;
+        }
+        if f.is_dir() || name.ends_with('/') {
+            continue;
+        }
+        if let Some(set) = &wanted {
+            if !set.contains(&name) {
                 continue;
             }
-            if let Some(set) = &wanted {
-                if !set.contains(&name) {
-                    continue;
-                }
-            }
-            t += f.size();
         }
-        t
-    };
+        total += f.size();
+    }
 
     let mut current = 0u64;
     for i in 0..za.len() {
         let mut f = open_entry(&mut za, i, password)
             .map_err(|e| AppError::Archive(e.to_string()))?;
         let name = f.name().to_string();
+        if name.starts_with("__MACOSX/") {
+            continue;
+        }
         if let Some(set) = &wanted {
             if !set.contains(&name) {
                 continue;
@@ -202,8 +237,33 @@ pub fn extract_zip(
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut out = fs::File::create(&out_path)?;
-        copy(&mut f, &mut out)?;
+        #[cfg(unix)]
+        {
+            let mode = f.unix_mode().unwrap_or(0o644);
+            if mode & 0o170000 == 0o120000 {
+                // 符号链接：内容即目标路径
+                let mut target = String::new();
+                f.read_to_string(&mut target)?;
+                let _ = fs::remove_file(&out_path);
+                std::os::unix::fs::symlink(&target, &out_path)
+                    .map_err(|e| AppError::Archive(format!("创建符号链接失败: {e}")))?;
+            } else {
+                let mut out = fs::File::create(&out_path)?;
+                copy(&mut f, &mut out)?;
+                let perm = PermissionsExt::from_mode(mode & 0o7777);
+                fs::set_permissions(&out_path, perm)?;
+            }
+            if let Some(xattrs) = xattr_map.get(&name) {
+                for (k, v) in xattrs {
+                    let _ = xattr::set(&out_path, k, v);
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            let mut out = fs::File::create(&out_path)?;
+            copy(&mut f, &mut out)?;
+        }
         count += 1;
         current += f.size();
         if let Some(cb) = on_progress {
@@ -216,14 +276,17 @@ pub fn extract_zip(
     })
 }
 
-pub fn list_zip(archive: &str, _password: Option<&str>) -> AppResult<Vec<EntryInfo>> {
+pub fn list_zip(archive: &str, password: Option<&str>) -> AppResult<Vec<EntryInfo>> {
     let file = fs::File::open(archive)?;
     let mut za = ZipArchive::new(file)
         .map_err(|e| AppError::Archive(format!("无法打开 zip: {e}")))?;
     let mut out = Vec::with_capacity(za.len());
     for i in 0..za.len() {
-        let f = za.by_index(i).map_err(|e| AppError::Archive(e.to_string()))?;
+        let f = open_entry(&mut za, i, password).map_err(|e| AppError::Archive(e.to_string()))?;
         let name = f.name().to_string();
+        if name.starts_with("__MACOSX/") {
+            continue;
+        }
         out.push(EntryInfo {
             name,
             size: f.size(),
@@ -246,15 +309,12 @@ pub fn preview_zip(
     let mut za = ZipArchive::new(file)
         .map_err(|e| AppError::Archive(format!("无法打开 zip: {e}")))?;
     for i in 0..za.len() {
-        let name = {
-            let zf = za.by_index(i).map_err(|e| AppError::Archive(e.to_string()))?;
-            zf.name().to_string()
-        };
+        let mut f = open_entry(&mut za, i, password)
+            .map_err(|e| AppError::Archive(e.to_string()))?;
+        let name = f.name().to_string();
         if name != entry {
             continue;
         }
-        let mut f = open_entry(&mut za, i, password)
-            .map_err(|e| AppError::Archive(e.to_string()))?;
         if f.is_dir() {
             return Err(AppError::Archive("该条目是目录，无法预览".into()));
         }
@@ -270,15 +330,12 @@ pub fn test_zip(archive: &str, password: Option<&str>) -> AppResult<TestResult> 
     let mut entries_out = Vec::with_capacity(za.len());
     let mut all_ok = true;
     for i in 0..za.len() {
-        let name = {
-            let zf = za.by_index(i).map_err(|e| AppError::Archive(e.to_string()))?;
-            zf.name().to_string()
-        };
+        let mut f = open_entry(&mut za, i, password)
+            .map_err(|e| AppError::Archive(e.to_string()))?;
+        let name = f.name().to_string();
         if name.ends_with('/') {
             continue;
         }
-        let mut f = open_entry(&mut za, i, password)
-            .map_err(|e| AppError::Archive(e.to_string()))?;
         match copy(&mut f, &mut std::io::sink()) {
             Ok(_) => entries_out.push(EntryTestStatus {
                 name,
@@ -370,6 +427,117 @@ pub(crate) fn sanitize(name: &str) -> PathBuf {
         .collect::<Vec<_>>()
         .join("/");
     PathBuf::from(cleaned)
+}
+
+/// 真实文件 unix 权限（含普通文件类型位 0o100000）。仅 unix 平台解析真实权限。
+#[cfg(unix)]
+fn file_mode(abs: &Path) -> AppResult<u32> {
+    let m = abs.metadata()?.mode();
+    Ok((m & 0o7777) | 0o100000)
+}
+
+#[cfg(windows)]
+fn file_mode(_abs: &Path) -> AppResult<u32> {
+    Ok(0o100644)
+}
+
+/// 目录 unix 权限（含目录类型位 0o040000）。仅 unix 平台解析真实权限。
+#[cfg(unix)]
+fn dir_mode(abs: &Path) -> AppResult<u32> {
+    let m = abs.metadata()?.mode();
+    Ok((m & 0o7777) | 0o040000)
+}
+
+#[cfg(windows)]
+fn dir_mode(_abs: &Path) -> AppResult<u32> {
+    Ok(0o040644)
+}
+
+/// 收集文件/目录的全部扩展属性（仅 macOS 有意义；其他平台不写 AppleDouble，返回空）
+#[cfg(target_os = "macos")]
+fn collect_xattrs(abs: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut map = BTreeMap::new();
+    if let Ok(names) = xattr::list(abs) {
+        for name in names {
+            if let Ok(Some(val)) = xattr::get(abs, &name) {
+                map.insert(name.to_string_lossy().to_string(), val);
+            }
+        }
+    }
+    map
+}
+
+#[cfg(not(target_os = "macos"))]
+fn collect_xattrs(_abs: &Path) -> BTreeMap<String, Vec<u8>> {
+    BTreeMap::new()
+}
+
+/// 真实相对路径 -> `__MACOSX` 下的 AppleDouble 条目名（仅 macOS 写入时用到）
+#[cfg(target_os = "macos")]
+fn apple_double_entry_name(rel_str: &str) -> String {
+    let idx = rel_str.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let (dir, name) = rel_str.split_at(idx);
+    format!("__MACOSX/{}._{}", dir.trim_end_matches('/'), name)
+}
+
+/// 若文件带扩展属性，写一个 `__MACOSX` AppleDouble 条目保真元数据（仅 macOS）
+#[cfg(target_os = "macos")]
+fn maybe_write_apple_double(
+    zw: &mut ZipWriter<fs::File>,
+    abs: &Path,
+    rel_str: &str,
+    password: Option<&str>,
+    level: u8,
+) -> AppResult<()> {
+    let xattrs = collect_xattrs(abs);
+    if xattrs.is_empty() {
+        return Ok(());
+    }
+    let mut finder_info = [0u8; 32];
+    if let Some(fi) = xattrs.get("com.apple.FinderInfo") {
+        let n = fi.len().min(32);
+        finder_info[..n].copy_from_slice(&fi[..n]);
+    }
+    let mut others = xattrs;
+    others.remove("com.apple.FinderInfo");
+    let blob = apple_double::build(&finder_info, &others);
+    let ad_name = apple_double_entry_name(rel_str);
+    let opts = base_opts(level, password);
+    zw.start_file(&ad_name, opts)
+        .map_err(|e| AppError::Archive(e.to_string()))?;
+    zw.write_all(&blob).map_err(|e| AppError::Archive(e.to_string()))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn maybe_write_apple_double(
+    _zw: &mut ZipWriter<fs::File>,
+    _abs: &Path,
+    _rel_str: &str,
+    _password: Option<&str>,
+    _level: u8,
+) -> AppResult<()> {
+    Ok(())
+}
+
+/// `__MACOSX/<dir>/._<name>` -> 真实相对路径 `<dir>/<name>`
+fn strip_apple_double(name: &str) -> Option<String> {
+    if !name.starts_with("__MACOSX/") {
+        return None;
+    }
+    let rest = &name["__MACOSX/".len()..];
+    if let Some(idx) = rest.rfind('/') {
+        let (dir, last) = rest.split_at(idx);
+        if !last.starts_with("/._") {
+            return None;
+        }
+        Some(format!("{}/{}", dir, &last[3..]))
+    } else {
+        if !rest.starts_with("._") {
+            return None;
+        }
+        Some(rest[2..].to_string())
+    }
 }
 
 fn summarize(dest: &str, format: &str) -> AppResult<ArchiveInfo> {

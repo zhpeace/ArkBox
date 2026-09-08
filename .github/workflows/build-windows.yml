@@ -1,0 +1,62 @@
+name: Build Windows
+
+# 触发：推送到主分支，或手动在 Actions 页点 Run workflow。
+# 注意：本机（macOS）无法交叉编译 Windows，此工作流必须在 GitHub 上运行。
+# 代码 push 到 GitHub 后自动产出 .msi / .nsis.exe 安装包，去 Actions 页下载 artifact 即可。
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Build Windows x64 (msi / nsis)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust (MSVC target)
+        # windows-latest 已预装 MSVC 工具链；unrar 绑官方 C++ 源码，在 MSVC 下编译最稳，故用 msvc 目标而非 gnu。
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Download 7z binary for Windows
+        # ArkBox 在 Windows 上用内置 7z 兜底处理镜像/封装格式（iso/cab/dmg/deb/rpm/xar/cpio/brotli/tar）。
+        # 经 choco 安装 7-Zip，再把 7z.exe + 7z.dll 拷进 src-tauri/binaries/，
+        # 由 tauri.conf.json 的 resources: ["binaries/"] 一并打进安装包。
+        # sevenzip_cli::init_bin 在 Windows 上会查找 binaries/7z.exe；7z.dll 需同目录以便加载格式插件。
+        shell: pwsh
+        run: |
+          choco install 7zip -y
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item "C:\Program Files\7-Zip\7z.exe" src-tauri/binaries/7z.exe
+          Copy-Item "C:\Program Files\7-Zip\7z.dll" src-tauri/binaries/7z.dll
+          Write-Host "7z.exe + 7z.dll copied:"
+          Get-Item src-tauri/binaries/7z.exe, src-tauri/binaries/7z.dll | Select-Object Name, Length
+
+      - name: Build ArkBox for Windows
+        # tauri build 会先跑 tauri.conf.json 的 beforeBuildCommand（cd .. && npx vite build …），
+        # 再编译并打包 Windows 安装包（msi + nsis）。
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi,nsis
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arkbox-windows
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: warn

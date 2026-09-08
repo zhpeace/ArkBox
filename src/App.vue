@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
 
 interface EntryInfo {
   name: string;
@@ -83,7 +82,10 @@ const pct = computed(() =>
 
 async function pickCompressPaths() {
   const r = await open({ multiple: true, directory: false });
-  if (r) compressPaths.value = Array.isArray(r) ? r : [r as string];
+  if (r) {
+    compressPaths.value = Array.isArray(r) ? r : [r as string];
+    maybePrefillDest();
+  }
 }
 async function pickDest() {
   const r = await save({ defaultPath: `archive.${extFor(format.value)}` });
@@ -134,6 +136,7 @@ async function doCompress() {
       compressHidden: compressHidden.value,
     });
     log(`已压缩: ${info.path} (${info.entry_count} 项, ${fmtBytes(info.total_size)})`);
+    void revealInFinder(destPath.value);
   } catch (e) {
     logErr(String(e));
   }
@@ -195,20 +198,155 @@ const entries = ref<EntryInfo[]>([]);
 const selected = ref<Record<string, boolean>>({});
 const preview = ref<PreviewData | null>(null);
 const browsePassword = ref("");
-const extractDest = ref("");
+const extractMode = ref<"here" | "subfolder" | "choose">("subfolder");
 const testResult = ref<TestResult | null>(null);
 const editing = ref<EditHandle | null>(null);
+
+/* ---------- 条目列表 / 预览 的分栏宽度（可拖拽，比例存本地） ---------- */
+const SPLIT_KEY = "arkbox.splitRatio";
+function loadSplitRatio(): number {
+  const v = Number(localStorage.getItem(SPLIT_KEY));
+  return Number.isFinite(v) && v >= 20 && v <= 80 ? v : 50;
+}
+const splitRatio = ref<number>(loadSplitRatio());
+
+function startResize(e: MouseEvent) {
+  e.preventDefault();
+  const row = (e.currentTarget as HTMLElement).parentElement;
+  if (!row) return;
+  const rect = row.getBoundingClientRect();
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "col-resize";
+  const move = (ev: MouseEvent) => {
+    const ratio = ((ev.clientX - rect.left) / rect.width) * 100;
+    splitRatio.value = Math.min(80, Math.max(20, ratio));
+  };
+  const up = () => {
+    localStorage.setItem(SPLIT_KEY, String(Math.round(splitRatio.value)));
+    document.body.style.userSelect = "";
+    document.body.style.cursor = "";
+    document.removeEventListener("mousemove", move);
+    document.removeEventListener("mouseup", up);
+  };
+  document.addEventListener("mousemove", move);
+  document.addEventListener("mouseup", up);
+}
+
+const searchText = ref("");
+const filteredEntries = computed(() =>
+  searchText.value.trim()
+    ? entries.value.filter((e) =>
+        e.name.toLowerCase().includes(searchText.value.trim().toLowerCase()),
+      )
+    : entries.value,
+);
+
+// 排序 + 批量选择 + 已选统计
+const sortKey = ref<"name" | "size">("name");
+const sortDir = ref<"asc" | "desc">("asc");
+const displayedEntries = computed(() => {
+  const arr = filteredEntries.value.slice();
+  arr.sort((a, b) => {
+    if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1; // 目录优先
+    const cmp =
+      sortKey.value === "name" ? a.name.localeCompare(b.name) : a.size - b.size;
+    return sortDir.value === "asc" ? cmp : -cmp;
+  });
+  return arr;
+});
+function sortInd(key: "name" | "size"): string {
+  return sortKey.value === key ? (sortDir.value === "asc" ? "↑" : "↓") : "";
+}
+function toggleSort(key: "name" | "size") {
+  if (sortKey.value === key) sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  else {
+    sortKey.value = key;
+    sortDir.value = "asc";
+  }
+}
+const selectedCount = computed(
+  () => entries.value.filter((e) => selected.value[e.name]).length,
+);
+const selectedSize = computed(() =>
+  entries.value
+    .filter((e) => selected.value[e.name] && !e.is_dir)
+    .reduce((s, e) => s + e.size, 0),
+);
+function selectAll() {
+  const m: Record<string, boolean> = {};
+  for (const e of entries.value) m[e.name] = true;
+  selected.value = m;
+}
+function invertAll() {
+  const m: Record<string, boolean> = {};
+  for (const e of entries.value) m[e.name] = !selected.value[e.name];
+  selected.value = m;
+}
+// 拖入/选择文件后，若未指定输出路径则预填默认值（父目录/<stem>.<ext>）
+function maybePrefillDest() {
+  if (destPath.value || compressPaths.value.length === 0) return;
+  const first = compressPaths.value[0];
+  const i = first.lastIndexOf("/");
+  const parent = i <= 0 ? "." : first.slice(0, i);
+  destPath.value = `${parent}/${stemOf(first)}.${extFor(format.value)}`;
+}
+watch(format, () => {
+  // 输出路径扩展名随格式联动
+  if (destPath.value) {
+    destPath.value = destPath.value.replace(/\.[^./\\]+$/, `.${extFor(format.value)}`);
+  }
+});
+// 压缩后在 Finder 中定位输出文件
+async function revealInFinder(path: string) {
+  try {
+    await invoke("reveal_in_finder", { path });
+  } catch (e) {
+    logErr(String(e));
+  }
+}
+
+// 嵌套压缩包逐层浏览：路径栈（面包屑）。栈空=看顶层归档；进入内层后栈顶为临时文件路径，
+// currentArchive 始终指向「当前正在浏览的归档」（顶层或某层临时文件），list/preview 都用它。
+const pathStack = ref<{ path: string; name: string }[]>([]);
+const archiveName = computed(() => archivePath.value.split("/").pop() || archivePath.value);
+const currentArchive = computed(() =>
+  pathStack.value.length ? pathStack.value[pathStack.value.length - 1].path : archivePath.value
+);
+function isNestedArchive(e: EntryInfo) {
+  return !e.is_dir && isArchivePath(e.name);
+}
+async function enterEntry(e: EntryInfo) {
+  if (!isNestedArchive(e)) return;
+  try {
+    const tmp = await invoke<string>("extract_nested", {
+      archive: currentArchive.value,
+      entry: e.name,
+      password: browsePassword.value || null,
+    });
+    pathStack.value.push({ path: tmp, name: e.name });
+    await refreshList();
+  } catch (err) {
+    logErr(String(err));
+  }
+}
+// 跳回第 idx 层（含）；popStack(-1) 回到顶层
+function popStack(idx: number) {
+  pathStack.value = pathStack.value.slice(0, idx + 1);
+  void refreshList();
+}
 
 async function openArchive() {
   const r = await open({ multiple: false, directory: false });
   if (r) {
     archivePath.value = r as string;
+    pathStack.value = [];
     await refreshList();
   }
 }
 
 /* ---------- 系统集成：文件关联 / 拖放 ---------- */
-const ARCHIVE_EXT = ["zip", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "txz", "rar"];
+// 必须与后端 ArchiveFormat::from_ext / Finder 扩展 archiveExts 保持一致，否则拖入时误判。
+const ARCHIVE_EXT = ["zip", "zipx", "jar", "apk", "war", "ear", "epub", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "tbz", "txz", "rar", "iso", "cab", "deb", "rpm", "cpio", "xar", "br", "dmg", "pkg", "img"];
 function isArchivePath(p: string): boolean {
   const lower = p.toLowerCase();
   if (ARCHIVE_EXT.some((e) => lower.endsWith(`.${e}`))) return true;
@@ -219,12 +357,14 @@ function isArchivePath(p: string): boolean {
 async function openAsArchive(p: string) {
   tab.value = "browse";
   archivePath.value = p;
+  pathStack.value = [];
   await refreshList();
 }
 
 function stageCompress(paths: string[]) {
   tab.value = "compress";
   compressPaths.value = paths;
+  maybePrefillDest();
 }
 
 function handleDrop(paths: string[]) {
@@ -237,14 +377,15 @@ function handleDrop(paths: string[]) {
   }
 }
 async function refreshList() {
-  if (!archivePath.value) return;
+  const arc = currentArchive.value;
+  if (!arc) return;
   entries.value = [];
   selected.value = {};
   testResult.value = null;
   preview.value = null;
   try {
     entries.value = await invoke("list_entries", {
-      archive: archivePath.value,
+      archive: arc,
       password: browsePassword.value || null,
     });
     log(`已读取: ${entries.value.length} 项`);
@@ -274,20 +415,36 @@ async function previewRow(entry: EntryInfo) {
 function selectedNames(): string[] {
   return entries.value.filter((e) => selected.value[e.name]).map((e) => e.name);
 }
+// 解压目标位置：同名文件夹 / 压缩包同级 / 弹框选择
+function dirOf(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i <= 0 ? "." : p.slice(0, i);
+}
+function stemOf(p: string): string {
+  let name = p.slice(p.lastIndexOf("/") + 1);
+  name = name.replace(/\.(tar\.gz|tar\.bz2|tar\.xz|tar\.zst|tgz|tbz|txz|zip|7z|gz|bz2|xz|zst|rar)$/i, "");
+  return name || "archive";
+}
+async function resolveExtractDest(): Promise<string | null> {
+  if (extractMode.value === "here") return dirOf(archivePath.value);
+  if (extractMode.value === "subfolder")
+    return `${dirOf(archivePath.value)}/${stemOf(archivePath.value)}`;
+  const r = await open({ multiple: false, directory: true, defaultPath: dirOf(archivePath.value) });
+  return (r as string) || null;
+}
 async function extractSelected() {
   const names = selectedNames();
   if (names.length === 0) return log("请勾选要解压的条目");
-  const r = await open({ multiple: false, directory: true });
-  if (!r) return;
-  extractDest.value = r as string;
+  const dest = await resolveExtractDest();
+  if (!dest) return;
   try {
     const res = await invoke("extract", {
       archive: archivePath.value,
-      dest: extractDest.value,
+      dest,
       entries: names,
       password: browsePassword.value || null,
     });
-    log(`已解压 ${names.length} 项 -> ${extractDest.value}`);
+    log(`已解压 ${names.length} 项 -> ${dest}`);
     void res;
   } catch (e) {
     logErr(String(e));
@@ -295,16 +452,16 @@ async function extractSelected() {
   progress.value = null;
 }
 async function extractAll() {
-  const r = await open({ multiple: false, directory: true });
-  if (!r) return;
+  const dest = await resolveExtractDest();
+  if (!dest) return;
   try {
     const res = await invoke("extract", {
       archive: archivePath.value,
-      dest: r,
+      dest,
       entries: null,
       password: browsePassword.value || null,
     });
-    log(`已全量解压 -> ${r as string}`);
+    log(`已全量解压 -> ${dest}`);
     void res;
   } catch (e) {
     logErr(String(e));
@@ -330,7 +487,7 @@ async function beginEdit(entryName: string) {
       password: browsePassword.value || null,
     });
     editing.value = h;
-    await shellOpen(h.temp_path);
+    await invoke("open_with_default_app", { path: h.temp_path });
     log(`已打开编辑: ${entryName}（改完点“完成编辑”）`);
   } catch (e) {
     logErr(String(e));
@@ -359,6 +516,74 @@ async function cancelEdit() {
     logErr(String(e));
   }
   editing.value = null;
+}
+
+/* ---------- 档案内增删 / 重命名条目 ---------- */
+const renaming = ref<{ name: string; value: string }>({ name: "", value: "" });
+function startRename(e: EntryInfo) {
+  renaming.value = { name: e.name, value: e.name };
+}
+async function confirmRename() {
+  const old = renaming.value.name;
+  const nv = renaming.value.value.trim();
+  renaming.value = { name: "", value: "" };
+  if (!nv || nv === old) return;
+  try {
+    await invoke("rename_entry", {
+      archive: archivePath.value,
+      oldName: old,
+      newName: nv,
+      password: browsePassword.value || null,
+    });
+    log(`已重命名: ${old} → ${nv}`);
+    await refreshList();
+  } catch (e) {
+    logErr(String(e));
+  }
+}
+async function deleteEntry(name: string) {
+  try {
+    await invoke("delete_entries", {
+      archive: archivePath.value,
+      entries: [name],
+      password: browsePassword.value || null,
+    });
+    log(`已删除: ${name}`);
+    await refreshList();
+  } catch (e) {
+    logErr(String(e));
+  }
+}
+async function deleteSelected() {
+  const names = selectedNames();
+  if (names.length === 0) return log("请先勾选要删除的条目");
+  try {
+    await invoke("delete_entries", {
+      archive: archivePath.value,
+      entries: names,
+      password: browsePassword.value || null,
+    });
+    log(`已删除 ${names.length} 项`);
+    await refreshList();
+  } catch (e) {
+    logErr(String(e));
+  }
+}
+async function addFiles() {
+  const r = await open({ multiple: true, directory: false });
+  if (!r) return;
+  const files = Array.isArray(r) ? r : [r as string];
+  try {
+    await invoke("add_entries", {
+      archive: archivePath.value,
+      newFiles: files,
+      password: browsePassword.value || null,
+    });
+    log(`已添加 ${files.length} 个文件`);
+    await refreshList();
+  } catch (e) {
+    logErr(String(e));
+  }
 }
 
 async function onReady() {
@@ -419,9 +644,9 @@ onMounted(onReady);
       </div>
     </div>
 
-    <div style="padding: 14px; overflow: auto; flex: 1">
+    <div style="padding: 14px; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; overflow: hidden">
       <!-- 压缩 -->
-      <div v-if="tab === 'compress'" class="col" style="gap: 14px">
+      <div v-if="tab === 'compress'" class="col" style="gap: 14px; flex: 1; min-height: 0; overflow: auto">
         <div class="panel col">
           <div class="row">
             <button @click="pickCompressPaths">选择文件/目录</button>
@@ -493,7 +718,7 @@ onMounted(onReady);
       </div>
 
       <!-- 浏览 -->
-      <div v-else class="col" style="gap: 14px">
+      <div v-else class="col" style="gap: 14px; flex: 1; min-height: 0; overflow: hidden">
         <div class="panel col">
           <div class="row">
             <button @click="openArchive">打开压缩包</button>
@@ -507,6 +732,12 @@ onMounted(onReady);
             <button @click="refreshList">刷新</button>
           </div>
           <div class="row">
+            <span class="label">解压到</span>
+            <select v-model="extractMode">
+              <option value="subfolder">同名文件夹</option>
+              <option value="here">压缩包同级</option>
+              <option value="choose">选择位置…</option>
+            </select>
             <button @click="extractAll">全量解压</button>
             <button @click="extractSelected">解压选中</button>
             <button @click="testArchive">完整性检测</button>
@@ -516,12 +747,25 @@ onMounted(onReady);
           </div>
         </div>
 
-        <div class="row" style="align-items: stretch; gap: 14px">
-          <div class="panel grow col">
-            <div class="muted">条目（勾选=解压/选中，点击=预览）</div>
-            <div class="list">
+        <div class="row" style="align-items: stretch; gap: 14px; flex: 1; min-height: 0; flex-wrap: nowrap">
+          <div class="panel col" :style="{ flex: '0 0 ' + splitRatio + '%', minWidth: 0, minHeight: 0, overflow: 'hidden' }">
+            <div class="row" style="gap: 10px; margin-bottom: 6px">
+              <span class="muted">条目</span>
+              <button class="sort-btn" @click="toggleSort('name')">名称 {{ sortInd('name') }}</button>
+              <button class="sort-btn" @click="toggleSort('size')">大小 {{ sortInd('size') }}</button>
+              <button @click="selectAll">全选</button>
+              <button @click="invertAll">反选</button>
+              <button @click="addFiles">添加文件</button>
+              <button @click="deleteSelected" v-if="!pathStack.length">删除选中 {{ selectedCount ? selectedCount : "" }}</button>
+              <span class="muted">已选 {{ selectedCount }} 项 · {{ fmtBytes(selectedSize) }}</span>
+            </div>
+            <div class="row" style="gap: 8px; margin-bottom: 6px">
+              <input class="grow" v-model="searchText" placeholder="在压缩包内搜索文件名…" />
+              <span class="muted" v-if="searchText">{{ filteredEntries.length }} 匹配 / {{ entries.length }} 项</span>
+            </div>
+            <div class="list" style="flex: 1; min-height: 0; max-height: none">
               <div
-                v-for="e in entries"
+                v-for="e in displayedEntries"
                 :key="e.name"
                 :class="['item', preview && preview.name === e.name && 'sel']"
                 @click="previewRow(e)"
@@ -533,16 +777,34 @@ onMounted(onReady);
                 />
                 <span class="name">{{ e.name }}{{ e.is_dir ? "/" : "" }}</span>
                 <span class="meta" v-if="!e.is_dir">{{ fmtBytes(e.size) }}</span>
+                <span class="actions" @click.stop>
+                  <template v-if="renaming.name === e.name">
+                    <input
+                      class="rename-input"
+                      v-model="renaming.value"
+                      @keyup.enter="confirmRename"
+                      @keyup.esc="renaming = { name: '', value: '' }"
+                    />
+                    <button class="mini" @click="confirmRename">确定</button>
+                    <button class="mini" @click="renaming = { name: '', value: '' }">取消</button>
+                  </template>
+                  <template v-else>
+                    <button class="mini" @click="startRename(e)">重命名</button>
+                    <button class="mini" @click="deleteEntry(e.name)">删除</button>
+                  </template>
+                </span>
               </div>
-              <div v-if="!entries.length" class="muted" style="padding: 10px">
-                尚未打开压缩包
+              <div v-if="!filteredEntries.length" class="muted" style="padding: 10px">
+                {{ archivePath ? "未匹配到条目" : "尚未打开压缩包" }}
               </div>
             </div>
           </div>
 
-          <div class="panel grow col">
+          <div class="splitter" title="拖动调整宽度" @mousedown.prevent="startResize"></div>
+
+          <div class="panel col" style="flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden">
             <div class="muted">预览</div>
-            <div v-if="preview" class="preview">
+            <div v-if="preview" class="preview" style="flex: 1; min-height: 0; max-height: none">
               <div v-if="preview.is_binary && preview.data_base64">
                 <img
                   v-if="preview.mime.startsWith('image/')"
@@ -579,7 +841,7 @@ onMounted(onReady);
         </div>
       </div>
 
-      <div class="panel" style="margin-top: 14px">
+      <div class="panel">
         <div class="muted" style="margin-bottom: 6px">日志</div>
         <div class="log">{{ logs.join("\n") }}</div>
       </div>

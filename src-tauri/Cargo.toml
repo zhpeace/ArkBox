@@ -50,9 +50,25 @@ default = []
 name = "bz-qlhelper"
 path = "src/bin/qlhelper.rs"
 
+[[bin]]
+name = "bz-cli"
+path = "src/bin/bz-cli.rs"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# xattr 仅 unix 平台可用（macOS/Linux）；Windows 无此 crate，故限定 target 依赖。
+[target.'cfg(unix)'.dependencies]
+xattr = "1"
+
+# objc 仅 macOS 可用，bz-cli 的 Finder 服务供给者用其注册 Cocoa selector。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+
+# 仅 Windows 编译时拉取：右键上下文菜单注册（HKCU）。macOS/Linux 完全不引入。
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

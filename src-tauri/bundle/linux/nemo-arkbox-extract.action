@@ -1,0 +1,8 @@
+[Nemo Action]
+Active=true
+Name=用 ArkBox 解压
+Comment=解压到同级同名目录（静默，不弹窗）
+Exec=bz-cli extract %F
+Selection=any
+Extensions=zip;7z;tar;gz;bz2;xz;zst;tgz;tbz;txz;rar;
+Quote=double
