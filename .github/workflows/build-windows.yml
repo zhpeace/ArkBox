@@ -32,7 +32,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Download 7z binary for Windows
         # ArkBox 在 Windows 上用内置 7z 兜底处理镜像/封装格式（iso/cab/dmg/deb/rpm/xar/cpio/brotli/tar）。

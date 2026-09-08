@@ -33,7 +33,7 @@ jobs:
           targets: aarch64-apple-darwin
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build ArkBox for macOS
         # 7z 兜底引擎用的 7zz 二进制已随仓库提交到 src-tauri/binaries/（arm64），
