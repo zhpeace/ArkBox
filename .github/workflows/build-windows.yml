@@ -48,6 +48,18 @@ jobs:
           Write-Host "7z.exe + 7z.dll copied:"
           Get-Item src-tauri/binaries/7z.exe, src-tauri/binaries/7z.dll | Select-Object Name, Length
 
+      - name: Install Windows bundling tools (WiX + NSIS)
+        # Tauri v2 打 msi 需要 WiX Toolset v3（candle/light），打 nsis 需要 NSIS（makensis）。
+        # windows-latest 默认不预装，必须显式安装，否则 bundle 阶段报 “WiX/NSIS not found”。
+        shell: pwsh
+        run: |
+          choco install wixtoolset nsis -y
+          $wix = (Get-ChildItem "C:\Program Files (x86)\WiX Toolset*" -Recurse -Filter candle.exe -ErrorAction SilentlyContinue | Select-Object -First 1).DirectoryName
+          if ($wix) { echo "$wix" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8 }
+          $nsis = (Get-ChildItem "C:\Program Files (x86)\NSIS" -Recurse -Filter makensis.exe -ErrorAction SilentlyContinue | Select-Object -First 1).DirectoryName
+          if ($nsis) { echo "$nsis" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8 }
+          echo "C:\Program Files (x86)\NSIS" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
       - name: Build ArkBox for Windows
         # tauri build 会先跑 tauri.conf.json 的 beforeBuildCommand（cd .. && npx vite build …），
         # 再编译并打包 Windows 安装包（msi + nsis）。
