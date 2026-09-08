@@ -1,0 +1,51 @@
+name: Build macOS
+
+# 触发：推送到主分支、打 v* tag，或手动在 Actions 页点 Run workflow。
+# 与 build-windows.yml 一起构成「全平台」CI：代码 push 到 GitHub 后自动产出 .app / .dmg artifact。
+# 注意：macOS 签名证书不在仓库内（.gitignore 已挡 *.p12 等），CI 走 ad-hoc 签名，
+# 产出的 .dmg 在 Gatekeeper 下会有未公证警告但仍可安装；如需正式分发再配 signing secrets。
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: Build macOS (app / dmg)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust (aarch64-apple-darwin)
+        # macos-latest 为 Apple Silicon (arm64)；仓库内已提交 arm64 的 binaries/7zz，架构匹配。
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build ArkBox for macOS
+        # 7z 兜底引擎用的 7zz 二进制已随仓库提交到 src-tauri/binaries/（arm64），
+        # 由 tauri.conf.json 的 resources 打进 .app；macOS 无需像 Windows 那样额外下载 7z。
+        # beforeBuildCommand 会先 npx vite build 前端，再 cargo build --release --bin bz-cli。
+        run: npm run tauri build -- --bundles app,dmg
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arkbox-macos
+          path: |
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: warn
