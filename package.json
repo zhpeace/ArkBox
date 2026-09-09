@@ -9,7 +9,7 @@
     "check": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:build": "tauri build && bash quicklook/bundle-into-app.sh && bash scripts/make-dmg.sh",
+    "tauri:build": "npm run build && tauri build && bash quicklook/bundle-into-app.sh && bash scripts/make-dmg.sh",
     "bundle:ql": "bash quicklook/bundle-into-app.sh",
     "dmg": "bash scripts/make-dmg.sh"
   },

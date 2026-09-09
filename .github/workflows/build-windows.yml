@@ -60,9 +60,13 @@ jobs:
           if ($nsis) { echo "$nsis" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8 }
           echo "C:\Program Files (x86)\NSIS" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
 
+      - name: Build frontend (vite)
+        # beforeBuildCommand 在 CI 中以 src-tauri 为起始目录，无法可靠读取仓库根 package.json，
+        # 故前端构建在此显式于仓库根执行；beforeBuildCommand 现在只负责编译 bz-cli 二进制。
+        run: npm run build
+
       - name: Build ArkBox for Windows
-        # tauri build 会先跑 tauri.conf.json 的 beforeBuildCommand（cd .. && npx vite build …），
-        # 再编译并打包 Windows 安装包（msi + nsis）。
+        # 前端已由上一步构建到 dist/；本步 tauri build 直接编译并打包 Windows 安装包（msi + nsis）。
         run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi,nsis
 
       - name: Upload Windows artifacts

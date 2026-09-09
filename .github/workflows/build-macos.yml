@@ -35,10 +35,15 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Build frontend (vite)
+        # beforeBuildCommand 在 CI 中以 src-tauri 为起始目录，无法可靠读取仓库根 package.json，
+        # 故前端构建在此显式于仓库根执行；beforeBuildCommand 现在只负责编译 bz-cli 二进制。
+        run: npm run build
+
       - name: Build ArkBox for macOS
         # 7z 兜底引擎用的 7zz 二进制已随仓库提交到 src-tauri/binaries/（arm64），
         # 由 tauri.conf.json 的 resources 打进 .app；macOS 无需像 Windows 那样额外下载 7z。
-        # beforeBuildCommand 会先 npx vite build 前端，再 cargo build --release --bin bz-cli。
+        # 前端已由上一步构建到 dist/，本步 tauri build 直接打包。
         run: npm run tauri build -- --bundles app,dmg
 
       - name: Upload macOS artifacts
