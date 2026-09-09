@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "cargo build --release --bin bz-cli"
+    "beforeBuildCommand": "cd src-tauri && cargo build --release --bin bz-cli"
   },
   "app": {
     "windows": [
