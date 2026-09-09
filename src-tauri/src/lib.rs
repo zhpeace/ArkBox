@@ -82,6 +82,7 @@ pub fn run() {
     crate::archive::sevenzip_cli::init_bin(app.handle());
 
     app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { urls } = event {
             let mut paths: Vec<String> = Vec::new();
             for u in urls {
@@ -96,6 +97,8 @@ pub fn run() {
                 let _ = app_handle.emit("opened-files", &paths);
             }
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (&app_handle, &event);
     });
 }
 
