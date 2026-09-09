@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "vite build",
+    "check": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:build": "tauri build && bash quicklook/bundle-into-app.sh && bash scripts/make-dmg.sh",
