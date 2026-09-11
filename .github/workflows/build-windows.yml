@@ -14,7 +14,7 @@ env:
 
 jobs:
   windows:
-    name: Build Windows x64 (msi / nsis)
+    name: Build Windows x64 (nsis)
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -66,14 +66,16 @@ jobs:
         run: npm run build
 
       - name: Build ArkBox for Windows
-        # 前端已由上一步构建到 dist/；本步 tauri build 直接编译并打包 Windows 安装包（msi + nsis）。
-        run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles msi,nsis
+        # 前端已由上一步构建到 dist/；本步 tauri build 直接编译并打包 Windows 安装包。
+        # 暂只打 nsis（.exe）：WiX 3.14 的 light.exe 依赖 .NET Framework 3.5，
+        # windows-latest 未启用该特性，打 msi 会报 "failed to run light.exe"。
+        # 如需 msi，需先启用 .NET 3.5：dism /online /enable-feature /featurename:NetFx3 /All /NoRestart
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: arkbox-windows
           path: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if-no-files-found: warn
