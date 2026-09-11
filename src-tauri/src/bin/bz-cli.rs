@@ -316,9 +316,9 @@ fn main() {
         eprintln!("用法: bz-cli <compress|extract> <path> [path...]");
         std::process::exit(2);
     }
-    let mode = args[1].as_str();
+    let mode = args[1].clone();
     let paths: Vec<String> = args.into_iter().skip(2).collect();
-    match mode {
+    match mode.as_str() {
         "compress" => shared::cli_compress(&paths),
         "extract" => shared::cli_extract(&paths),
         _ => {
